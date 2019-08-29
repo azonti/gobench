@@ -17,29 +17,31 @@ import (
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/valyala/fastrand"
 )
 
 var (
-	requests         int64
-	period           int64
-	clients          int
-	url              string
-	urlsFilePath     string
-	keepAlive        bool
-	postDataFilePath string
-	writeTimeout     int
-	readTimeout      int
-	authHeader       string
+	requests            int64
+	period              int64
+	clients             int
+	url                 string
+	urlsFilePath        string
+	keepAlive           bool
+	postDataFilePath    string
+	writeTimeout        int
+	readTimeout         int
+	authHeader          string
+	authHeadersFilePath string
 )
 
 type Configuration struct {
-	urls       []string
-	method     string
-	postData   []byte
-	requests   int64
-	period     int64
-	keepAlive  bool
-	authHeader string
+	urls        []string
+	method      string
+	postData    []byte
+	requests    int64
+	period      int64
+	keepAlive   bool
+	authHeaders []string
 
 	myClient fasthttp.Client
 }
@@ -89,6 +91,7 @@ func init() {
 	flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
 	flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
 	flag.StringVar(&authHeader, "auth", "", "Authorization header")
+	flag.StringVar(&authHeadersFilePath, "auth_f", "", "Authorization header file path")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -170,12 +173,13 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		urls:       make([]string, 0),
-		method:     "GET",
-		postData:   nil,
-		keepAlive:  keepAlive,
-		requests:   int64((1 << 63) - 1),
-		authHeader: authHeader}
+		urls:        make([]string, 0),
+		method:      "GET",
+		postData:    nil,
+		keepAlive:   keepAlive,
+		requests:    int64((1 << 63) - 1),
+		authHeaders: make([]string, 0),
+	}
 
 	if period != -1 {
 		configuration.period = period
@@ -206,7 +210,7 @@ func NewConfiguration() *Configuration {
 		fileLines, err := readLines(urlsFilePath)
 
 		if err != nil {
-			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: ", urlsFilePath, err)
+			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", urlsFilePath, err)
 		}
 
 		configuration.urls = fileLines
@@ -222,10 +226,24 @@ func NewConfiguration() *Configuration {
 		data, err := ioutil.ReadFile(postDataFilePath)
 
 		if err != nil {
-			log.Fatalf("Error in ioutil.ReadFile for file path: %s Error: ", postDataFilePath, err)
+			log.Fatalf("Error in ioutil.ReadFile for file path: %s Error: %v", postDataFilePath, err)
 		}
 
 		configuration.postData = data
+	}
+
+	if authHeadersFilePath != "" {
+		fileLines, err := readLines(authHeadersFilePath)
+
+		if err != nil {
+			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", authHeadersFilePath, err)
+		}
+
+		configuration.authHeaders = fileLines
+	}
+
+	if authHeader != "" {
+		configuration.authHeaders = append(configuration.authHeaders, authHeader)
 	}
 
 	configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
@@ -265,8 +283,9 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 				req.Header.Set("Connection", "close")
 			}
 
-			if len(configuration.authHeader) > 0 {
-				req.Header.Set("Authorization", configuration.authHeader)
+			if len(configuration.authHeaders) > 0 {
+				i := fastrand.Uint32n(uint32(len(configuration.authHeaders)))
+				req.Header.Set("Authorization", configuration.authHeaders[i])
 			}
 
 			req.SetBody(configuration.postData)
