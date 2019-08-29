@@ -52,7 +52,10 @@ type Result struct {
 	requests      int64
 	success       int64
 	networkFailed int64
-	badFailed     int64
+	information   int64
+	redirection   int64
+	clientError   int64
+	serverError   int64
 }
 
 var readThroughput int64
@@ -101,13 +104,19 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	var requests int64
 	var success int64
 	var networkFailed int64
-	var badFailed int64
+	var information int64
+	var redirection int64
+	var clientError int64
+	var serverError int64
 
 	for _, result := range results {
 		requests += result.requests
 		success += result.success
 		networkFailed += result.networkFailed
-		badFailed += result.badFailed
+		information += result.information
+		redirection += result.redirection
+		clientError += result.clientError
+		serverError += result.serverError
 	}
 
 	elapsed := time.Since(startTime).Seconds()
@@ -118,13 +127,16 @@ func printResults(results map[int]*Result, startTime time.Time) {
 
 	fmt.Println()
 	fmt.Printf("Requests:                       %10d hits\n", requests)
-	fmt.Printf("Successful requests:            %10d hits\n", success)
+	fmt.Printf("Successful requests (2xx):      %10d hits\n", success)
 	fmt.Printf("Network failed:                 %10d hits\n", networkFailed)
-	fmt.Printf("Bad requests failed (!2xx):     %10d hits\n", badFailed)
-	fmt.Printf("Successful requests rate:       %10.0f hits/sec\n", float64(success)/elapsed)
-	fmt.Printf("Read throughput:                %10.0f bytes/sec\n", float64(readThroughput)/elapsed)
-	fmt.Printf("Write throughput:               %10.0f bytes/sec\n", float64(writeThroughput)/elapsed)
-	fmt.Printf("Test time:                      %10.0f sec\n", elapsed)
+	fmt.Printf("Informational responses (1xx):  %10d hits\n", information)
+	fmt.Printf("Redirections (3xx):             %10d hits\n", redirection)
+	fmt.Printf("Client Errors (4xx):            %10d hits\n", clientError)
+	fmt.Printf("Server Errors (5xx):            %10d hits\n", serverError)
+	fmt.Printf("Successful requests rate:       %10.2f hits/sec\n", float64(success)/elapsed)
+	fmt.Printf("Read throughput:                %10.2f bytes/sec\n", float64(readThroughput)/elapsed)
+	fmt.Printf("Write throughput:               %10.2f bytes/sec\n", float64(writeThroughput)/elapsed)
+	fmt.Printf("Test time:                      %10.2f sec\n", elapsed)
 }
 
 func readLines(path string) (lines []string, err error) {
@@ -307,10 +319,17 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 				continue
 			}
 
-			if statusCode == fasthttp.StatusOK {
+			switch true {
+			case statusCode < 200:
+				result.information++
+			case statusCode < 300:
 				result.success++
-			} else {
-				result.badFailed++
+			case statusCode < 400:
+				result.redirection++
+			case statusCode < 500:
+				result.clientError++
+			default:
+				result.serverError++
 			}
 		}
 	}
