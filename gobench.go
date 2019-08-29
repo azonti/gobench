@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ var (
 	readTimeout         int
 	authHeader          string
 	authHeadersFilePath string
+	noCheckCert         bool
 )
 
 type Configuration struct {
@@ -42,8 +44,8 @@ type Configuration struct {
 	period      int64
 	keepAlive   bool
 	authHeaders []string
-
-	myClient fasthttp.Client
+	noCheckCert bool
+	myClient    fasthttp.Client
 }
 
 type Result struct {
@@ -92,6 +94,7 @@ func init() {
 	flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
 	flag.StringVar(&authHeader, "auth", "", "Authorization header")
 	flag.StringVar(&authHeadersFilePath, "auth_f", "", "Authorization header file path")
+	flag.BoolVar(&noCheckCert, "nc", false, "Do not validate server's certificate")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -179,6 +182,7 @@ func NewConfiguration() *Configuration {
 		keepAlive:   keepAlive,
 		requests:    int64((1 << 63) - 1),
 		authHeaders: make([]string, 0),
+		noCheckCert: noCheckCert,
 	}
 
 	if period != -1 {
@@ -249,6 +253,7 @@ func NewConfiguration() *Configuration {
 	configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
 	configuration.myClient.WriteTimeout = time.Duration(writeTimeout) * time.Millisecond
 	configuration.myClient.MaxConnsPerHost = clients
+	configuration.myClient.TLSConfig = &tls.Config{InsecureSkipVerify: noCheckCert}
 
 	configuration.myClient.Dial = MyDialer()
 
