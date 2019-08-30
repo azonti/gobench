@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -33,29 +34,32 @@ var (
 	readTimeout         int
 	authHeader          string
 	authHeadersFilePath string
+	sendAuthHeader0Prob float64
 	noCheckCert         bool
 )
 
 type Configuration struct {
-	urls        []string
-	method      string
-	postData    []byte
-	requests    int64
-	period      int64
-	keepAlive   bool
-	authHeaders []string
-	noCheckCert bool
-	myClient    fasthttp.Client
+	urls                []string
+	method              string
+	postData            []byte
+	requests            int64
+	period              int64
+	keepAlive           bool
+	authHeaders         []string
+	sendAuthHeader0Prob float64
+	noCheckCert         bool
+	myClient            fasthttp.Client
 }
 
 type Result struct {
-	requests      int64
-	success       int64
-	networkFailed int64
-	information   int64
-	redirection   int64
-	clientError   int64
-	serverError   int64
+	requests        int64
+	withAuthHeader0 int64
+	success         int64
+	networkFailed   int64
+	information     int64
+	redirection     int64
+	clientError     int64
+	serverError     int64
 }
 
 var readThroughput int64
@@ -97,11 +101,13 @@ func init() {
 	flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
 	flag.StringVar(&authHeader, "auth", "", "Authorization header")
 	flag.StringVar(&authHeadersFilePath, "auth_f", "", "Authorization header file path")
+	flag.Float64Var(&sendAuthHeader0Prob, "send_auth0_prob", 0.2, "Probability of sending 0th Authorization header")
 	flag.BoolVar(&noCheckCert, "nc", false, "Do not validate server's certificate")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
 	var requests int64
+	var withAuthHeader0 int64
 	var success int64
 	var networkFailed int64
 	var information int64
@@ -111,6 +117,7 @@ func printResults(results map[int]*Result, startTime time.Time) {
 
 	for _, result := range results {
 		requests += result.requests
+		withAuthHeader0 += result.withAuthHeader0
 		success += result.success
 		networkFailed += result.networkFailed
 		information += result.information
@@ -127,6 +134,7 @@ func printResults(results map[int]*Result, startTime time.Time) {
 
 	fmt.Println()
 	fmt.Printf("Requests:                       %10d hits\n", requests)
+	fmt.Printf("With 0th Authorization Header:  %10d hits\n", withAuthHeader0)
 	fmt.Printf("Successful requests (2xx):      %10d hits\n", success)
 	fmt.Printf("Network failed:                 %10d hits\n", networkFailed)
 	fmt.Printf("Informational responses (1xx):  %10d hits\n", information)
@@ -139,7 +147,7 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	fmt.Printf("Test time:                      %10.2f sec\n", elapsed)
 }
 
-func readLines(path string) (lines []string, err error) {
+func readLines(path string, lines []string) (err error) {
 
 	var file *os.File
 	var part []byte
@@ -188,13 +196,14 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		urls:        make([]string, 0),
-		method:      "GET",
-		postData:    nil,
-		keepAlive:   keepAlive,
-		requests:    int64((1 << 63) - 1),
-		authHeaders: make([]string, 0),
-		noCheckCert: noCheckCert,
+		urls:                make([]string, 0),
+		method:              "GET",
+		postData:            nil,
+		keepAlive:           keepAlive,
+		requests:            int64((1 << 63) - 1),
+		authHeaders:         make([]string, 0),
+		sendAuthHeader0Prob: sendAuthHeader0Prob,
+		noCheckCert:         noCheckCert,
 	}
 
 	if period != -1 {
@@ -222,18 +231,14 @@ func NewConfiguration() *Configuration {
 		configuration.requests = requests
 	}
 
-	if urlsFilePath != "" {
-		fileLines, err := readLines(urlsFilePath)
-
-		if err != nil {
-			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", urlsFilePath, err)
-		}
-
-		configuration.urls = fileLines
-	}
-
 	if url != "" {
 		configuration.urls = append(configuration.urls, url)
+	}
+
+	if urlsFilePath != "" {
+		if err := readLines(urlsFilePath, configuration.urls); err != nil {
+			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", urlsFilePath, err)
+		}
 	}
 
 	if postDataFilePath != "" {
@@ -248,18 +253,14 @@ func NewConfiguration() *Configuration {
 		configuration.postData = data
 	}
 
-	if authHeadersFilePath != "" {
-		fileLines, err := readLines(authHeadersFilePath)
-
-		if err != nil {
-			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", authHeadersFilePath, err)
-		}
-
-		configuration.authHeaders = fileLines
-	}
-
 	if authHeader != "" {
 		configuration.authHeaders = append(configuration.authHeaders, authHeader)
+	}
+
+	if authHeadersFilePath != "" {
+		if err := readLines(authHeadersFilePath, configuration.authHeaders); err != nil {
+			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", authHeadersFilePath, err)
+		}
 	}
 
 	configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
@@ -285,7 +286,7 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
 	}
 }
 
-func client(configuration *Configuration, result *Result, done *sync.WaitGroup) {
+func client(clientNo int, configuration *Configuration, result *Result, done *sync.WaitGroup) {
 	for result.requests < configuration.requests {
 		for _, tmpUrl := range configuration.urls {
 
@@ -300,9 +301,19 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 				req.Header.Set("Connection", "close")
 			}
 
-			if len(configuration.authHeaders) > 0 {
-				i := fastrand.Uint32n(uint32(len(configuration.authHeaders)))
+			switch true {
+			case len(configuration.authHeaders) > 1:
+				var i int
+				if fastrand.Uint32() < uint32(math.MaxUint32*configuration.sendAuthHeader0Prob) {
+					i = 0
+					result.withAuthHeader0++
+				} else {
+					l := len(configuration.authHeaders) / configuration.myClient.MaxConnsPerHost
+					i = clientNo*l + int(result.requests%int64(l))
+				}
 				req.Header.Set("Authorization", configuration.authHeaders[i])
+			case len(configuration.authHeaders) > 0:
+				req.Header.Set("Authorization", configuration.authHeaders[0])
 			}
 
 			req.SetBody(configuration.postData)
@@ -367,7 +378,7 @@ func main() {
 	for i := 0; i < clients; i++ {
 		result := &Result{}
 		results[i] = result
-		go client(configuration, result, &done)
+		go client(i, configuration, result, &done)
 
 	}
 	fmt.Println("Waiting for results...")
