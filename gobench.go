@@ -11,6 +11,8 @@ import (
 	"log"
 	"math"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -349,6 +351,9 @@ func client(clientNo int, configuration *Configuration, result *Result, done *sy
 }
 
 func main() {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 
 	startTime := time.Now()
 	var done sync.WaitGroup
