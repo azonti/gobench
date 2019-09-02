@@ -149,7 +149,7 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	fmt.Printf("Test time:                      %10.2f sec\n", elapsed)
 }
 
-func readLines(path string, lines []string) (err error) {
+func readLines(path string, lines *[]string) (err error) {
 
 	var file *os.File
 	var part []byte
@@ -168,7 +168,7 @@ func readLines(path string, lines []string) (err error) {
 		}
 		buffer.Write(part)
 		if !prefix {
-			lines = append(lines, buffer.String())
+			*lines = append(*lines, buffer.String())
 			buffer.Reset()
 		}
 	}
@@ -238,7 +238,7 @@ func NewConfiguration() *Configuration {
 	}
 
 	if urlsFilePath != "" {
-		if err := readLines(urlsFilePath, configuration.urls); err != nil {
+		if err := readLines(urlsFilePath, &configuration.urls); err != nil {
 			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", urlsFilePath, err)
 		}
 	}
@@ -260,7 +260,7 @@ func NewConfiguration() *Configuration {
 	}
 
 	if authHeadersFilePath != "" {
-		if err := readLines(authHeadersFilePath, configuration.authHeaders); err != nil {
+		if err := readLines(authHeadersFilePath, &configuration.authHeaders); err != nil {
 			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: %v", authHeadersFilePath, err)
 		}
 	}
